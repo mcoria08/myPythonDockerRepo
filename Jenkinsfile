@@ -1,65 +1,46 @@
 pipeline {
-    agent any
-        environment {
-        //once you sign up for Docker hub, use that user_id here
-        registry = "896304481314.dkr.ecr.us-east-2.amazonaws.com/jenkins-pipeline-build-demo-ii"
-        //- update your credentials ID after creating credentials for connecting to Docker Hub
-        registryCredential = 'dockerhub'
-        dockerImage = ''
-    }
-    stages {
-
-        stage ('checkout') {
-            steps {
-            checkout([$class: 'GitSCM', branches: [[name: '*/master']], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[url: 'https://github.com/mcoria08/myPythonDockerRepo']]])
-            }
-        }
-       
-        stage ('Build docker image') {
-            steps {
-                script {
-                dockerImage = docker.build registry + ":$BUILD_NUMBER"
-                //dockerImage = docker.build registry + ":$BUILD_NUMBER"
-
-                }
-            }
-        }
-       
-         // Uploading Docker images into Docker Hub
-    stage('Upload Image') {
-     steps{   
-         script {
-            docker.withRegistry( '', registryCredential ) {
-            dockerImage.push()
-            }
-        }
+  agent any
+  environment {
+    registry = "896304481314.dkr.ecr.us-east-2.amazonaws.com/jenkins-pipeline-build-demo-ii"
+  }
+  stages {
+    stage('Cloning Git') {
+      steps {
+        checkout([$class: 'GitSCM', branches: [[name: '*/master']], extensions: [], userRemoteConfigs: [[url: 'https://github.com/mcoria08/myPythonDockerRepo']]])
       }
     }
-
-    stage('Remove Unused docker image') {
-      steps{
-        sh "docker rmi $registry:$BUILD_NUMBER"
+    
+    stage('Docker build'){
+        steps{
+          script {
+            dockerImage = docker.build registry
+          }
+        }
+    }
+    
+    stage('Docker push'){
+        steps{
+          script {
+            sh 'aws ecr get-login-password --region us-east-2 | docker login --username AWS --password-stdin 896304481314.dkr.ecr.us-east-2.amazonaws.com'
+            sh 'docker push 896304481314.dkr.ecr.us-east-2.amazonaws.com/jenkins-pipeline-build-demo-ii:latest'
+          }
+        }
+    }
+    
+    // Stopping Docker containers for cleaner Docker run
+    stage('stop previous containers') {
+      steps {
+        sh 'docker ps -f name=mypythonContainer -q | xargs --no-run-if-empty docker container stop'
+        sh 'docker container ls -a -fname=mypythonContainer -q | xargs -r docker container rm'
       }
     }
    
-    stage ('K8S Deploy') {
-        steps {
-            script {
-                kubernetesDeploy(
-                    configs: 'k8s-deployment.yaml',
-                    kubeconfigId: 'K8S',
-                    enableConfigSubstitution: true
-                    )           
-               
-            }
+    stage('Docker Run') {
+      steps{
+        script {
+          sh 'docker run -d -p 8096:5000 --rm --name mypythonContainer 896304481314.dkr.ecr.us-east-2.amazonaws.com/jenkins-pipeline-build-demo-ii:latest'
         }
+      }
     }
-  
-    }  
-}
-
-always {
-  // remove built docker image and prune system
-  print 'Cleaning up the Docker system.'
-  sh 'docker system prune -f'
+  }
 }
